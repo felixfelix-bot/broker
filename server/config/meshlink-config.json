@@ -163,6 +163,10 @@
     "renewAtPercent": 80,
     "autoMint": false,
     "pollIntervalMs": 60,
-    "_note": "Buy-side: discover a TollGate on the WAN gateway (:2121), pay Cashu, renew. autoMint is for the FakeWallet lab only."
+    "_note": "Buy-side: discover a TollGate on the WAN gateway (:2121), pay Cashu, renew. autoMint is for the FakeWallet lab only.",
+    "routeThrough": false,
+    "routeTable": 2121,
+    "routeNexthop": "",
+    "guestInterface": "br-guest"
   }
 }

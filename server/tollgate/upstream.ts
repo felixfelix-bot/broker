@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import { Wallet, getEncodedToken } from "@cashu/cashu-ts";
+import { installUpstreamRoute, removeUpstreamRoute, DEFAULT_ROUTE_TABLE } from "./upstream-route";
 
 const execFileAsync = promisify(execFile);
 
@@ -17,6 +18,10 @@ export interface UpstreamConfig {
   renewAtPercent: number;
   autoMint: boolean;
   pollIntervalMs: number;
+  routeThrough: boolean;
+  routeTable: number;
+  routeNexthop: string;
+  guestInterface: string;
   dataDir: string;
 }
 
@@ -78,6 +83,10 @@ export function loadUpstreamConfig(dataDir: string): UpstreamConfig {
     renewAtPercent: Math.min(95, Math.max(50, Number(file.renewAtPercent) || 80)),
     autoMint: String(process.env.MESHLINK_UPSTREAM_AUTO_MINT ?? file.autoMint ?? false) === "true",
     pollIntervalMs: Math.max(10_000, (Number(file.pollIntervalMs) || 60) * 1000),
+    routeThrough: String(process.env.MESHLINK_UPSTREAM_ROUTE_THROUGH ?? file.routeThrough ?? false) === "true",
+    routeTable: Math.max(1, Number(file.routeTable) || DEFAULT_ROUTE_TABLE),
+    routeNexthop: String(process.env.MESHLINK_UPSTREAM_ROUTE_NEXTHOP ?? file.routeNexthop ?? ""),
+    guestInterface: String(file.guestInterface || "br-guest"),
     dataDir,
   };
 }
@@ -255,7 +264,7 @@ export class UpstreamClient {
   private readonly config: UpstreamConfig;
   private wallet: UpstreamWallet | null = null;
   private offer: UpstreamOffer | null = null;
-  status: any = { state: "idle" };
+  status: any = { state: "idle", purchases: 0 };
 
   constructor(config: UpstreamConfig) {
     this.config = config;
@@ -322,7 +331,23 @@ export class UpstreamClient {
         metric: tags.metric?.[0] || offer.metric,
         deviceIdentifier: tags["device-identifier"]?.[0],
       };
-      this.status = { state: "granted", ...grant, gateway: offer.gateway, cost };
+      let route: string | undefined;
+      let routeError: string | undefined;
+      if (this.config.routeThrough) {
+        try {
+          await installUpstreamRoute(offer.gateway, this.config.guestInterface, this.config.routeTable, this.config.routeNexthop);
+          route = "installed";
+        } catch (error) {
+          route = "error";
+          routeError = String(error);
+          console.error("[Upstream] route install failed:", routeError);
+        }
+      }
+      this.status = {
+        state: "granted", ...grant, gateway: offer.gateway, cost, route, routeError,
+        purchases: Number(this.status.purchases || 0) + 1,
+        lastGrantAt: new Date().toISOString(),
+      };
       this.scheduleRenewal(grant);
       return grant;
     }
@@ -383,6 +408,9 @@ export class UpstreamClient {
       return;
     }
     this.status = { state: "starting" };
+    if (this.config.routeThrough) {
+      removeUpstreamRoute(this.config.guestInterface, this.config.routeTable).catch(() => undefined);
+    }
     this.runOnce()
       .then(() => console.log("[Upstream] initial purchase granted"))
       .catch((error) => {
